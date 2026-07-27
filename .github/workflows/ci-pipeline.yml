@@ -1,0 +1,49 @@
+name: CI/CD GitOps Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/demo-app:${{ github.sha }},${{ secrets.DOCKERHUB_USERNAME }}/demo-app:latest
+
+      - name: Update GitOps Deployment Manifest
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITOPS_PAT }}
+          script: |
+            const owner = 'salmankhan369';
+            const repo = 'k8s-gitops-infrastructure';
+            const path = 'k8s-manifests/overlays/prod/deployment.yaml';
+            const newImage = `${{ secrets.DOCKERHUB_USERNAME }}/demo-app:${{ github.sha }}`;
+
+            const fileData = await github.rest.repos.getContent({ owner, repo, path });
+            const content = Buffer.from(fileData.data.content, 'base64').toString('utf-8');
+            const updatedContent = content.replace(/image:\s*.*\/demo-app:.*/, `image: ${newImage}`);
+
+            await github.rest.repos.createOrUpdateFileContents({
+              owner,
+              repo,
+              path,
+              message: `chore: update demo-app image to ${newImage}`,
+              content: Buffer.from(updatedContent).toString('base64'),
+              sha: fileData.data.sha,
+            });
